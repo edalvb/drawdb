@@ -25,6 +25,8 @@ export const getModalTitle = (modal) => {
       return i18n.t("language");
     case MODAL.SHARE:
       return i18n.t("share");
+    case MODAL.GROUP_TABLES:
+      return i18n.t("group_tables");
     default:
       return "";
   }

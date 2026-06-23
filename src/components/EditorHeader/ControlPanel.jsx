@@ -89,6 +89,7 @@ import { DateTime } from "luxon";
 import ConfigureCustomTypes from "./ConfigureCustomTypes";
 import { useGoogleDrive } from "../../utils/googleDrive";
 import { ddbDiagramIsValid } from "../../utils/validateSchema";
+import { applyGrouping, groupTablesIntelligently } from "../../utils/grouping";
 
 export default function ControlPanel({
   title,
@@ -169,6 +170,13 @@ export default function ControlPanel({
           updateNote(element.id, element.undo);
         }
       }
+      setRedoStack((prev) => [...prev, a]);
+      return;
+    }
+
+    if (a.action === "group") {
+      setTables(a.undo.tables);
+      setAreas(a.undo.areas);
       setRedoStack((prev) => [...prev, a]);
       return;
     }
@@ -369,6 +377,13 @@ export default function ControlPanel({
           updateNote(element.id, element.redo);
         }
       }
+      setUndoStack((prev) => [...prev, a]);
+      return;
+    }
+
+    if (a.action === "group") {
+      setTables(a.redo.tables);
+      setAreas(a.redo.areas);
       setUndoStack((prev) => [...prev, a]);
       return;
     }
@@ -650,6 +665,96 @@ export default function ControlPanel({
       zoom: scale,
       pan: { x: centerX, y: centerY },
     }));
+  };
+  // Fit the viewport to a freshly-computed layout (can't reuse fitWindow, whose
+  // tables/areas come from a now-stale render closure).
+  const fitToLayout = (layoutAreas, layoutTables) => {
+    const el = document.getElementById("canvas");
+    if (!el) return;
+    const canvas = el.getBoundingClientRect();
+    const boxes = layoutAreas.length
+      ? layoutAreas.map((a) => ({ x: a.x, y: a.y, w: a.width, h: a.height }))
+      : layoutTables.map((tb) => ({
+          x: tb.x,
+          y: tb.y,
+          w: settings.tableWidth,
+          h: getTableHeight(
+            tb,
+            settings.tableWidth,
+            settings.showComments,
+            relationships,
+          ),
+        }));
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const b of boxes) {
+      minX = Math.min(minX, b.x);
+      minY = Math.min(minY, b.y);
+      maxX = Math.max(maxX, b.x + b.w);
+      maxY = Math.max(maxY, b.y + b.h);
+    }
+    if (!isFinite(minX)) return;
+    const padding = 40;
+    const width = maxX - minX + padding;
+    const height = maxY - minY + padding;
+    const scale = Math.max(
+      0.05,
+      Math.floor(Math.min(canvas.width / width, canvas.height / height) * 20) / 20,
+    );
+    setTransform((prev) => ({
+      ...prev,
+      zoom: scale,
+      pan: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 },
+    }));
+  };
+  // "Group and adjust": cluster tables with the embedding pipeline (semantic on),
+  // apply the new layout + areas as one undoable step, then fit the view.
+  const groupAndAdjust = async () => {
+    if (tables.length < 2) {
+      Toast.warning(t("not_enough_tables"));
+      return;
+    }
+    const toastId = "group-adjust";
+    Toast.info({ id: toastId, content: t("grouping_tables"), duration: 0 });
+    try {
+      const targetGroups = Math.min(
+        Math.max(2, tables.length),
+        Math.max(2, Math.round(tables.length / 4) || 2),
+      );
+      const result = await groupTablesIntelligently(tables, relationships, {
+        useSemantic: true,
+        targetGroups,
+        settings,
+        onProgress: (p) => {
+          const content =
+            p.phase === "model"
+              ? t("downloading_model")
+              : p.phase === "embedding"
+                ? t("computing_embeddings")
+                : t("grouping_tables");
+          Toast.info({ id: toastId, content, duration: 0 });
+        },
+      });
+      const { newTables, newAreas, undoEntry } = applyGrouping(
+        result,
+        tables,
+        areas,
+        t("group_and_adjust"),
+      );
+      setTables(newTables);
+      setAreas(newAreas);
+      setUndoStack((prev) => [...prev, undoEntry]);
+      setRedoStack([]);
+      fitToLayout(newAreas, newTables);
+      Toast.close(toastId);
+      Toast.success(t("grouping_done"));
+    } catch (e) {
+      console.error(e);
+      Toast.close(toastId);
+      Toast.error(t("grouping_failed"));
+    }
   };
   const edit = () => {
     if (selectedElement.element === ObjectType.TABLE) {
@@ -1500,6 +1605,10 @@ export default function ControlPanel({
         function: copyAsImage,
         shortcut: "Ctrl+Alt+C",
       },
+      group_tables: {
+        function: () => setModal(MODAL.GROUP_TABLES),
+        disabled: layout.readOnly || tables.length < 2,
+      },
     },
     view: {
       header: {
@@ -1570,6 +1679,10 @@ export default function ControlPanel({
       reset_view: {
         function: resetView,
         shortcut: "Enter/Return",
+      },
+      group_and_adjust: {
+        function: groupAndAdjust,
+        disabled: layout.readOnly || tables.length < 2,
       },
       show_comments: {
         state: settings.showComments ? (

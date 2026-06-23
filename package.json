@@ -15,6 +15,7 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@douyinfe/semi-ui": "^2.77.1",
+    "@huggingface/transformers": "^4.2.0",
     "@lexical/react": "^0.12.5",
     "@monaco-editor/react": "^4.7.0",
     "@vercel/analytics": "^1.2.2",
@@ -39,7 +40,6 @@
     "react-dom": "^18.2.0",
     "react-hotkeys-hook": "^4.4.1",
     "react-i18next": "^14.1.1",
-    "react-tweet": "^3.3.1",
     "react-router-dom": "^6.30.4",
     "react-tweet": "^3.2.1",
     "usehooks-ts": "^3.1.0"

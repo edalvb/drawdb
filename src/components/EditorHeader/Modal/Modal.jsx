@@ -5,7 +5,10 @@ import { Parser as OracleParser } from "oracle-sql-parser";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { DB, MODAL, STATUS } from "../../../data/constants";
-import { quoteCustomTypes } from "../../../utils/importSQL/preprocess";
+import {
+  quoteCustomTypes,
+  stripUnsupportedStatements,
+} from "../../../utils/importSQL/preprocess";
 import { databases } from "../../../data/databases";
 import {
   useAreas,
@@ -29,6 +32,7 @@ import CodeEditor from "../../CodeEditor";
 import ImportDiagram from "./ImportDiagram";
 import ImportSource from "./ImportSource";
 import Language from "./Language";
+import GroupTables from "./GroupTables";
 import New from "./New";
 import Open from "./Open";
 import Rename from "./Rename";
@@ -114,7 +118,7 @@ export default function Modal({
 
         const src =
           targetDatabase === DB.POSTGRES
-            ? quoteCustomTypes(importSource.src)
+            ? quoteCustomTypes(stripUnsupportedStatements(importSource.src))
             : importSource.src;
 
         ast = parser.astify(src, {
@@ -327,6 +331,8 @@ export default function Modal({
         );
       case MODAL.SHARE:
         return <Share title={title} setModal={setModal} />;
+      case MODAL.GROUP_TABLES:
+        return <GroupTables setModal={setModal} />;
       default:
         return <></>;
     }
@@ -372,9 +378,9 @@ export default function Modal({
           ((modal === MODAL.IMG || modal === MODAL.CODE) && !exportData.data) ||
           (modal === MODAL.SAVEAS && saveAsTitle === "") ||
           (modal === MODAL.IMPORT_SRC && importSource.src === ""),
-        hidden: modal === MODAL.SHARE,
+        hidden: modal === MODAL.SHARE || modal === MODAL.GROUP_TABLES,
       }}
-      hasCancel={modal !== MODAL.SHARE}
+      hasCancel={modal !== MODAL.SHARE && modal !== MODAL.GROUP_TABLES}
       cancelText={t("cancel")}
       width={getModalWidth(modal)}
       bodyStyle={{

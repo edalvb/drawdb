@@ -87,6 +87,8 @@ import { deleteFromCache, STORAGE_KEY } from "../../utils/cache";
 import { useLiveQuery } from "dexie-react-hooks";
 import { DateTime } from "luxon";
 import ConfigureCustomTypes from "./ConfigureCustomTypes";
+import { useGoogleDrive } from "../../utils/googleDrive";
+import { ddbDiagramIsValid } from "../../utils/validateSchema";
 
 export default function ControlPanel({
   title,
@@ -145,6 +147,12 @@ export default function ControlPanel({
   const isTemplate = useMatch("/editor/templates/:id");
   const navigate = useNavigateWithParams();
   const extensions = useExtensions();
+  const {
+    isConfigured: isDriveConfigured,
+    saveFileToDrive,
+    openPicker,
+  } = useGoogleDrive();
+  const [driveFileId, setDriveFileId] = useState(null);
 
   const undo = () => {
     if (undoStack.length === 0) return;
@@ -871,6 +879,75 @@ export default function ControlPanel({
 
   const open = () => setModal(MODAL.OPEN);
   const saveDiagramAs = () => setModal(MODAL.SAVEAS);
+
+  const buildDiagramData = () => ({
+    tables,
+    relationships,
+    notes,
+    subjectAreas: areas,
+    database,
+    ...(databases[database].hasTypes && { types }),
+    ...(databases[database].hasEnums && { enums }),
+    title,
+  });
+
+  const saveToDrive = async () => {
+    if (!isDriveConfigured) {
+      Toast.error(t("drive_not_configured"));
+      return;
+    }
+    try {
+      const content = JSON.stringify(buildDiagramData(), null, 2);
+      const file = await saveFileToDrive(content, `${title}.ddb`, driveFileId);
+      setDriveFileId(file.id);
+      Toast.success(t("saved_to_google_drive"));
+    } catch (error) {
+      console.error(error);
+      Toast.error(t("failed_to_save_to_google_drive"));
+    }
+  };
+
+  const openFromDrive = async () => {
+    if (!isDriveConfigured) {
+      Toast.error(t("drive_not_configured"));
+      return;
+    }
+    try {
+      await openPicker((content, name, fileId, downloadError) => {
+        if (downloadError || content == null) {
+          Toast.error(t("failed_to_save_to_google_drive"));
+          return;
+        }
+        let json;
+        try {
+          json = JSON.parse(content);
+        } catch {
+          Toast.error(t("invalid_file"));
+          return;
+        }
+        if (!ddbDiagramIsValid(json)) {
+          Toast.error(t("invalid_file"));
+          return;
+        }
+        setTables(json.tables);
+        setRelationships(json.relationships);
+        setAreas(json.subjectAreas ?? []);
+        setNotes(json.notes ?? []);
+        if (json.title) setTitle(json.title);
+        if (databases[database].hasEnums && json.enums) setEnums(json.enums);
+        if (databases[database].hasTypes && json.types) setTypes(json.types);
+        setUndoStack([]);
+        setRedoStack([]);
+        setTransform((prev) => ({ ...prev, pan: { x: 0, y: 0 } }));
+        setDriveFileId(fileId);
+        Toast.success(`${t("loaded_diagram")}: ${name}`);
+      });
+    } catch (error) {
+      console.error(error);
+      Toast.error(t("failed_to_save_to_google_drive"));
+    }
+  };
+
   const fullscreen = useFullscreen();
 
   useEffect(() => {
@@ -927,6 +1004,10 @@ export default function ControlPanel({
       save_as: {
         function: saveDiagramAs,
         shortcut: "Ctrl+Shift+S",
+        disabled: layout.readOnly,
+      },
+      save_to_drive: {
+        function: saveToDrive,
         disabled: layout.readOnly,
       },
       save_as_template: {
@@ -1005,6 +1086,10 @@ export default function ControlPanel({
             disabled: layout.readOnly,
           },
         ],
+      },
+      import_from_drive: {
+        function: openFromDrive,
+        disabled: layout.readOnly,
       },
       import_from_source: {
         ...(database === DB.GENERIC && {

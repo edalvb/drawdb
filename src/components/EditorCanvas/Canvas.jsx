@@ -680,16 +680,10 @@ export default function Canvas() {
     (e) => {
       e.preventDefault();
 
-      if (e.shiftKey) {
-        setTransform((prev) => ({
-          ...prev,
-          pan: {
-            ...prev.pan,
-            x: prev.pan.x + e.deltaY / prev.zoom,
-          },
-        }));
-      } else {
-        // Default and Ctrl/Meta: zoom centered on cursor
+      // Browsers report a trackpad pinch-to-zoom gesture as a wheel event with
+      // ctrlKey set. Ctrl/Cmd + wheel (mouse) is treated as an explicit zoom too.
+      if (e.ctrlKey || e.metaKey) {
+        // Zoom centered on cursor
         const eagernessFactor = 0.05;
         setTransform((prev) => ({
           pan: {
@@ -705,6 +699,19 @@ export default function Canvas() {
                 Math.sign(e.deltaY),
           },
           zoom: e.deltaY <= 0 ? prev.zoom * 1.05 : prev.zoom / 1.05,
+        }));
+      } else {
+        // Otherwise pan in the direction of the scroll. Two-finger trackpad
+        // scrolling carries both axes; Shift + wheel maps a vertical-only mouse
+        // wheel to horizontal panning.
+        const deltaX = e.shiftKey ? e.deltaY : e.deltaX;
+        const deltaY = e.shiftKey ? e.deltaX : e.deltaY;
+        setTransform((prev) => ({
+          ...prev,
+          pan: {
+            x: prev.pan.x + deltaX / prev.zoom,
+            y: prev.pan.y + deltaY / prev.zoom,
+          },
         }));
       }
     },

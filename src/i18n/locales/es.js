@@ -286,6 +286,14 @@ const es = {
     failed_to_load_diagram: "Error al cargar el diagrama",
     see_all: "Ver todo",
     configure_custom_types: "Configurar tipos personalizados",
+    import_from_drive: "Importar desde Google Drive",
+    save_to_drive: "Guardar en Google Drive",
+    saved_to_google_drive: "Guardado en Google Drive",
+    failed_to_save_to_google_drive: "Error al acceder a Google Drive",
+    invalid_file: "Archivo de diagrama no válido",
+    loaded_diagram: "Diagrama cargado",
+    drive_not_configured:
+      "Google Drive no está configurado. Añade VITE_GOOGLE_CLIENT_ID y VITE_GOOGLE_API_KEY en .env y reinicia.",
   },
 };
 

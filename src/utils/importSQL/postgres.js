@@ -42,20 +42,25 @@ export function fromPostgres(ast, diagramDb = DB.GENERIC) {
             field.id = nanoid();
             field.name = d.column.column.expr.value;
 
+            // Types we quoted during preprocessing (custom enums/composites and
+            // built-ins node-sql-parser can't parse, e.g. `"vector(2048)"`,
+            // `"timetz"`) arrive double-quoted. Unwrap the quotes and split off
+            // any `(size)` so the underlying type can be resolved.
+            const rawDataType = d.definition.dataType;
+            const unquoted = rawDataType.replace(/^"([\s\S]*)"$/, "$1");
+            const sizeMatch = unquoted.match(/^(.*?)\s*\(([^)]*)\)\s*$/);
+            const baseType = (sizeMatch ? sizeMatch[1] : unquoted).trim();
+
             let type = types.find((t) =>
-              new RegExp(`^(${t.name}|"${t.name}")$`).test(
-                d.definition.dataType,
-              ),
+              new RegExp(`^(${t.name}|"${t.name}")$`).test(rawDataType),
             )?.name;
             type ??= enums.find((t) =>
-              new RegExp(`^(${t.name}|"${t.name}")$`).test(
-                d.definition.dataType,
-              ),
+              new RegExp(`^(${t.name}|"${t.name}")$`).test(rawDataType),
             )?.name;
 
-            type ??=
-              dbToTypes[diagramDb][d.definition.dataType.toUpperCase()].type;
-            type ??= affinity[diagramDb][d.definition.dataType.toUpperCase()];
+            type ??= dbToTypes[diagramDb][baseType.toUpperCase()]?.type;
+            type ??= affinity[diagramDb][baseType.toUpperCase()];
+            type ??= baseType.toUpperCase();
 
             field.type = type;
 
@@ -110,6 +115,8 @@ export function fromPostgres(ast, diagramDb = DB.GENERIC) {
               } else {
                 field.size = d.definition["length"];
               }
+            } else if (sizeMatch) {
+              field.size = sizeMatch[2].replace(/\s+/g, "");
             }
             field.check = "";
             if (d.check) {

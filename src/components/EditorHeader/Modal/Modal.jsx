@@ -5,6 +5,7 @@ import { Parser as OracleParser } from "oracle-sql-parser";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { DB, MODAL, STATUS } from "../../../data/constants";
+import { quoteCustomTypes } from "../../../utils/importSQL/preprocess";
 import { databases } from "../../../data/databases";
 import {
   useAreas,
@@ -111,7 +112,12 @@ export default function Modal({
       } else {
         const parser = new Parser();
 
-        ast = parser.astify(importSource.src, {
+        const src =
+          targetDatabase === DB.POSTGRES
+            ? quoteCustomTypes(importSource.src)
+            : importSource.src;
+
+        ast = parser.astify(src, {
           database: targetDatabase,
         });
       }

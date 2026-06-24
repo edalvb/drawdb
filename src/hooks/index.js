@@ -8,6 +8,7 @@ export { default as useSelect } from "./useSelect";
 export { default as useSettings } from "./useSettings";
 export { default as useDiagram } from "./useDiagram";
 export { default as useTransform } from "./useTransform";
+export { default as useTransformRef } from "./useTransformRef";
 export { default as useTypes } from "./useTypes";
 export { default as useUndoRedo } from "./useUndoRedo";
 export { default as useEnums } from "./useEnums";

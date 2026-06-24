@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { memo, useMemo, useRef, useState } from "react";
 import {
   Button,
   ButtonGroup,
@@ -25,12 +25,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { useHover } from "usehooks-ts";
 
-export default function Area({
-  data,
-  onPointerDown,
-  setResize,
-  setInitDimensions,
-}) {
+function Area({ data, onPointerDown, setResize, setInitDimensions }) {
   const ref = useRef(null);
   const isHovered = useHover(ref);
   const { layout } = useLayout();
@@ -158,7 +153,7 @@ export default function Area({
         y={data.y}
         width={data.width > 0 ? data.width : 0}
         height={data.height > 0 ? data.height : 0}
-        onPointerDown={onPointerDown}
+        onPointerDown={() => onPointerDown(data, ObjectType.AREA)}
       >
         <div
           className={`w-full h-full p-2 rounded cursor-move border-2 ${
@@ -262,6 +257,8 @@ export default function Area({
     </g>
   );
 }
+
+export default memo(Area);
 
 function EditPopoverContent({ data }) {
   const [editField, setEditField] = useState({});

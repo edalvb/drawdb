@@ -1,6 +1,6 @@
-import { createContext, useCallback, useState } from "react";
+import { createContext, useCallback, useMemo, useState } from "react";
 import { Action, DB, ObjectType, defaultBlue } from "../data/constants";
-import { useTransform, useUndoRedo, useSelect, useCollab } from "../hooks";
+import { useTransformRef, useUndoRedo, useSelect, useCollab } from "../hooks";
 import { Toast } from "@douyinfe/semi-ui";
 import { useTranslation } from "react-i18next";
 import { nanoid } from "nanoid";
@@ -13,7 +13,7 @@ export default function DiagramContextProvider({ children }) {
   const [database, setDatabaseRaw] = useState(DB.GENERIC);
   const [tables, setTables] = useState([]);
   const [relationships, setRelationships] = useState([]);
-  const { transform } = useTransform();
+  const { transformRef } = useTransformRef();
   const { setUndoStack, setRedoStack } = useUndoRedo();
   const { selectedElement, setSelectedElement } = useSelect();
   const { emitDelta, isApplyingRemoteRef } = useCollab();
@@ -40,8 +40,8 @@ export default function DiagramContextProvider({ children }) {
     const newTable = {
       id,
       name: `table_${id}`,
-      x: transform.pan.x,
-      y: transform.pan.y,
+      x: transformRef.current.pan.x,
+      y: transformRef.current.pan.y,
       locked: false,
       fields: [
         {
@@ -314,10 +314,22 @@ export default function DiagramContextProvider({ children }) {
     }
   };
 
+  // O(1) lookups by id, recomputed only when `tables` changes. Lets consumers
+  // (e.g. Relationship) resolve the tables they reference without scanning the
+  // whole array on every render.
+  const tablesById = useMemo(() => {
+    const map = new Map();
+    for (const table of tables) {
+      map.set(table.id, table);
+    }
+    return map;
+  }, [tables]);
+
   return (
     <DiagramContext.Provider
       value={{
         tables,
+        tablesById,
         setTables,
         addTable,
         updateTable,

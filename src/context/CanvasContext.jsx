@@ -108,54 +108,70 @@ export function CanvasContextProvider({ children, ...attrs }) {
     ],
   );
 
-  const [pointerScreenCoords, setPointerScreenCoords] = useState({
-    x: 0,
-    y: 0,
-  });
-  const pointerDiagramCoords = useMemo(
-    () => toDiagramSpace(pointerScreenCoords),
-    [pointerScreenCoords, toDiagramSpace],
-  );
+  // The pointer position is read at event/animation frequency but almost never
+  // needs to *render* anything. Keeping it in a ref (instead of state) means a
+  // bare pointer move no longer re-renders this provider — and therefore no
+  // longer repaints the whole diagram. Components that need the live value read
+  // it on demand through `pointer.spaces`.
+  const pointerScreenRef = useRef({ x: 0, y: 0 });
+  // Always points at the latest space-conversion helper so the on-demand
+  // getters below convert with the current viewBox without being recreated.
+  const toDiagramSpaceRef = useRef(toDiagramSpace);
+  toDiagramSpaceRef.current = toDiagramSpace;
+
   const [pointerStyle, setPointerStyle] = useState("default");
 
   /**
    * @param {PointerEvent} e
    */
-  function detectPointerMovement(e) {
+  const detectPointerMovement = useCallback((e) => {
     const targetElm = /** @type {HTMLElement | null} */ (e.currentTarget);
     if (!e.isPrimary || !targetElm) return;
 
     const canvasBounds = targetElm.getBoundingClientRect();
 
-    setPointerScreenCoords({
+    pointerScreenRef.current = {
       x: e.clientX - canvasBounds.left,
       y: e.clientY - canvasBounds.top,
-    });
-  }
+    };
+  }, []);
 
   // Important for touch screen devices!
   useEventListener("pointerdown", detectPointerMovement, canvasWrapRef);
 
   useEventListener("pointermove", detectPointerMovement, canvasWrapRef);
 
-  const contextValue = {
-    canvas: {
-      screenSize,
-      viewBox,
-    },
-    coords: {
-      toDiagramSpace,
-      toScreenSpace,
-    },
-    pointer: {
-      spaces: {
-        screen: pointerScreenCoords,
-        diagram: pointerDiagramCoords,
+  // Stable pointer API. `spaces` is a getter so reads always reflect the live
+  // ref + current conversion; only `style` changes its enclosing object.
+  const pointer = useMemo(
+    () => ({
+      get spaces() {
+        const screen = pointerScreenRef.current;
+        return {
+          screen,
+          diagram: toDiagramSpaceRef.current(screen),
+        };
       },
       style: pointerStyle,
       setStyle: setPointerStyle,
-    },
-  };
+    }),
+    [pointerStyle],
+  );
+
+  const contextValue = useMemo(
+    () => ({
+      canvas: {
+        screenSize,
+        viewBox,
+      },
+      coords: {
+        toDiagramSpace,
+        toScreenSpace,
+      },
+      pointer,
+    }),
+    [screenSize, viewBox, toDiagramSpace, toScreenSpace, pointer],
+  );
 
   return (
     <CanvasContext.Provider value={contextValue}>
@@ -163,5 +179,5 @@ export function CanvasContextProvider({ children, ...attrs }) {
         {children}
       </div>
     </CanvasContext.Provider>
-  )
+  );
 }

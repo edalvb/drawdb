@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Slot } from "../../context/ExtensionsContext";
 import {
   Action,
@@ -35,6 +35,12 @@ import { getRectFromEndpoints, isInsideRect } from "../../utils/rect";
 import { State, noteWidth } from "../../data/constants";
 import { nanoid } from "nanoid";
 
+const notDragging = {
+  id: -1,
+  type: ObjectType.NONE,
+  grabOffset: { x: 0, y: 0 },
+};
+
 export default function Canvas() {
   const { t } = useTranslation();
 
@@ -60,11 +66,6 @@ export default function Canvas() {
     bulkSelectedElements,
     setBulkSelectedElements,
   } = useSelect();
-  const notDragging = {
-    id: -1,
-    type: ObjectType.NONE,
-    grabOffset: { x: 0, y: 0 },
-  };
   const [dragging, setDragging] = useState(notDragging);
   const [linking, setLinking] = useState(false);
   const [linkingLine, setLinkingLine] = useState({
@@ -104,6 +105,16 @@ export default function Canvas() {
     linkingLine.endY,
     emitAwareness,
   ]);
+  useEffect(
+    () => () => {
+      if (panRafRef.current != null) {
+        cancelAnimationFrame(panRafRef.current);
+        panRafRef.current = null;
+      }
+    },
+    [],
+  );
+
   const [hoveredTable, setHoveredTable] = useState({
     tableId: null,
     fieldId: null,
@@ -129,9 +140,20 @@ export default function Canvas() {
     ctrlKey: false,
     metaKey: false,
   });
-  // this is used to store the element that is clicked on
-  // at the moment, and shouldn't be a part of the state
-  let elementPointerDown = null;
+  // Records which element (if any) the current pointerdown started on. Lives in
+  // a ref (not state/closure) so the per-element callback can stay referentially
+  // stable, which lets the canvas elements be memoized. It is set by the
+  // element's own pointerdown (which bubbles first) and consumed by the svg's
+  // pointerdown handler below.
+  const elementPointerDownRef = useRef(null);
+
+  // Coalesces pan updates to one per animation frame.
+  const panRafRef = useRef(null);
+  const pendingPanRef = useRef(null);
+
+  const handleElementPointerDown = useCallback((element, type) => {
+    elementPointerDownRef.current = { element, type };
+  }, []);
 
   const isSameElement = (el1, el2) => {
     return el1.id === el2.id && el1.type === el2.type;
@@ -307,6 +329,25 @@ export default function Canvas() {
     return { x, y };
   };
 
+  // Applies the most recent pan gesture inputs against the live pointer
+  // position. Shared between the per-frame rAF and the flush on pointerup so a
+  // pan that completes within a single frame is never dropped.
+  const applyPendingPan = () => {
+    const pending = pendingPanRef.current;
+    pendingPanRef.current = null;
+    if (!pending) return;
+    const screen = pointer.spaces.screen;
+    setTransform((prev) => ({
+      ...prev,
+      pan: {
+        x:
+          pending.panStart.x + (pending.cursorStart.x - screen.x) / pending.zoom,
+        y:
+          pending.panStart.y + (pending.cursorStart.y - screen.y) / pending.zoom,
+      },
+    }));
+  };
+
   /**
    * @param {PointerEvent} e
    */
@@ -316,17 +357,20 @@ export default function Canvas() {
     if (!e.isPrimary) return;
 
     if (panning.isPanning) {
-      setTransform((prev) => ({
-        ...prev,
-        pan: {
-          x:
-            panning.panStart.x +
-            (panning.cursorStart.x - pointer.spaces.screen.x) / transform.zoom,
-          y:
-            panning.panStart.y +
-            (panning.cursorStart.y - pointer.spaces.screen.y) / transform.zoom,
-        },
-      }));
+      // Pointer events can fire faster than the display refreshes. Stash the
+      // gesture inputs and apply at most one transform update per frame so we
+      // don't queue renders that never paint.
+      pendingPanRef.current = {
+        panStart: panning.panStart,
+        cursorStart: panning.cursorStart,
+        zoom: transform.zoom,
+      };
+      if (panRafRef.current == null) {
+        panRafRef.current = requestAnimationFrame(() => {
+          panRafRef.current = null;
+          applyPendingPan();
+        });
+      }
       return;
     }
 
@@ -444,6 +488,12 @@ export default function Canvas() {
    * @param {PointerEvent} e
    */
   const handlePointerDown = (e) => {
+    // Consume whichever element recorded itself just before this handler ran
+    // (its pointerdown bubbles first). Clearing it here means a later pointerdown
+    // on empty canvas can't accidentally reuse a stale element.
+    const pressed = elementPointerDownRef.current;
+    elementPointerDownRef.current = null;
+
     if (!e.isPrimary) return;
 
     // don't pan if the sidesheet for editing a table is open
@@ -464,12 +514,12 @@ export default function Canvas() {
         y1: pointer.spaces.diagram.y,
         x2: pointer.spaces.diagram.x,
         y2: pointer.spaces.diagram.y,
-        show: elementPointerDown === null || !elementPointerDown.element.locked,
+        show: pressed === null || !pressed.element.locked,
         ctrlKey: e.ctrlKey,
         metaKey: e.metaKey,
       });
-      if (elementPointerDown !== null) {
-        handlePointerDownOnElement(e, elementPointerDown);
+      if (pressed !== null) {
+        handlePointerDownOnElement(e, pressed);
       }
       pointer.setStyle("crosshair");
     } else if (isMouseMiddleButton || isMouseRightButton) {
@@ -563,6 +613,12 @@ export default function Canvas() {
       if (e.button === 2) rightClickPanned.current = true;
     }
     setPanning((old) => ({ ...old, isPanning: false }));
+    if (panRafRef.current != null) {
+      cancelAnimationFrame(panRafRef.current);
+      panRafRef.current = null;
+      // Flush the last coalesced frame so a sub-frame pan isn't lost.
+      applyPendingPan();
+    }
     pointer.setStyle("default");
 
     if (linking) handleLinking();
@@ -600,11 +656,11 @@ export default function Canvas() {
     });
   };
 
-  const handleGripField = () => {
+  const handleGripField = useCallback(() => {
     setPanning((old) => ({ ...old, isPanning: false }));
     setDragging(notDragging);
     setLinking(true);
-  };
+  }, []);
 
   const getCardinality = (startField, endField) => {
     const startIsUnique = startField.unique || startField.primary;
@@ -779,12 +835,7 @@ export default function Canvas() {
               data={a}
               setResize={setAreaResize}
               setInitDimensions={setAreaInitDimensions}
-              onPointerDown={() => {
-                elementPointerDown = {
-                  element: a,
-                  type: ObjectType.AREA,
-                };
-              }}
+              onPointerDown={handleElementPointerDown}
             />
           ))}
           {relationships.map((e) => (
@@ -797,12 +848,7 @@ export default function Canvas() {
               setHoveredTable={setHoveredTable}
               handleGripField={handleGripField}
               setLinkingLine={setLinkingLine}
-              onPointerDown={() => {
-                elementPointerDown = {
-                  element: table,
-                  type: ObjectType.TABLE,
-                };
-              }}
+              onPointerDown={handleElementPointerDown}
             />
           ))}
           {linking && (
@@ -815,16 +861,7 @@ export default function Canvas() {
           )}
           <Slot name="svg-overlay" />
           {notes.map((n) => (
-            <Note
-              key={n.id}
-              data={n}
-              onPointerDown={() => {
-                elementPointerDown = {
-                  element: n,
-                  type: ObjectType.NOTE,
-                };
-              }}
-            />
+            <Note key={n.id} data={n} onPointerDown={handleElementPointerDown} />
           ))}
           {bulkSelectRect.show && (
             <rect
@@ -881,32 +918,55 @@ export default function Canvas() {
               </tr>
             </tbody>
           </table>
-          <table className="table-auto grow [&_th]:text-left [&_th:not(:first-of-type)]:text-right [&_td:not(:first-of-type)]:text-right [&_td]:min-w-[8ch]">
-            <thead>
-              <tr>
-                <th colSpan={3}>{t("cursor_coordinates")}</th>
-              </tr>
-              <tr className="italic [&_th]:font-normal">
-                <th>{t("coordinate_space")}</th>
-                <th>x</th>
-                <th>y</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>{t("coordinate_space_screen")}</td>
-                <td>{pointer.spaces.screen.x.toFixed(2)}</td>
-                <td>{pointer.spaces.screen.y.toFixed(2)}</td>
-              </tr>
-              <tr>
-                <td>{t("coordinate_space_diagram")}</td>
-                <td>{pointer.spaces.diagram.x.toFixed(2)}</td>
-                <td>{pointer.spaces.diagram.y.toFixed(2)}</td>
-              </tr>
-            </tbody>
-          </table>
+          <PointerCoordinates pointer={pointer} />
         </div>
       )}
     </div>
+  );
+}
+
+// The pointer position lives in a ref (not state), so it can't be read live
+// during a normal render. This dev-only readout polls it on an animation frame
+// while mounted, keeping its re-renders isolated from the diagram.
+function PointerCoordinates({ pointer }) {
+  const { t } = useTranslation();
+  const [coords, setCoords] = useState(() => pointer.spaces);
+
+  useEffect(() => {
+    let raf = 0;
+    const tick = () => {
+      const { screen, diagram } = pointer.spaces;
+      setCoords({ screen, diagram });
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [pointer]);
+
+  return (
+    <table className="table-auto grow [&_th]:text-left [&_th:not(:first-of-type)]:text-right [&_td:not(:first-of-type)]:text-right [&_td]:min-w-[8ch]">
+      <thead>
+        <tr>
+          <th colSpan={3}>{t("cursor_coordinates")}</th>
+        </tr>
+        <tr className="italic [&_th]:font-normal">
+          <th>{t("coordinate_space")}</th>
+          <th>x</th>
+          <th>y</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>{t("coordinate_space_screen")}</td>
+          <td>{coords.screen.x.toFixed(2)}</td>
+          <td>{coords.screen.y.toFixed(2)}</td>
+        </tr>
+        <tr>
+          <td>{t("coordinate_space_diagram")}</td>
+          <td>{coords.diagram.x.toFixed(2)}</td>
+          <td>{coords.diagram.y.toFixed(2)}</td>
+        </tr>
+      </tbody>
+    </table>
   );
 }

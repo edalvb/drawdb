@@ -5,7 +5,7 @@ import {
   defaultNoteTheme,
   noteWidth,
 } from "../data/constants";
-import { useUndoRedo, useTransform, useSelect, useCollab } from "../hooks";
+import { useUndoRedo, useTransformRef, useSelect, useCollab } from "../hooks";
 import { Toast } from "@douyinfe/semi-ui";
 import { useTranslation } from "react-i18next";
 
@@ -14,7 +14,7 @@ export const NotesContext = createContext(null);
 export default function NotesContextProvider({ children }) {
   const { t } = useTranslation();
   const [notes, setNotes] = useState([]);
-  const { transform } = useTransform();
+  const { transformRef } = useTransformRef();
   const { setUndoStack, setRedoStack } = useUndoRedo();
   const { selectedElement, setSelectedElement } = useSelect();
   const { emitDelta, isApplyingRemoteRef } = useCollab();
@@ -32,8 +32,8 @@ export default function NotesContextProvider({ children }) {
       const height = 88;
       created = {
         id: notes.length,
-        x: transform.pan.x,
-        y: transform.pan.y - height / 2,
+        x: transformRef.current.pan.x,
+        y: transformRef.current.pan.y - height / 2,
         title: `note_${notes.length}`,
         content: "",
         locked: false,

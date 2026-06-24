@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import {
   Action,
   Tab,
@@ -48,7 +48,7 @@ import {
   getRelationshipFields,
 } from "../../utils/utils";
 
-export default function Table({
+function Table({
   tableData,
   onPointerDown,
   setHoveredTable,
@@ -59,7 +59,7 @@ export default function Table({
   const { layout } = useLayout();
   const {
     database,
-    tables,
+    tablesById,
     relationships,
     addTable,
     deleteTable,
@@ -214,25 +214,30 @@ export default function Table({
     }
   };
 
-  const getFieldReference = (fieldData) => {
-    let matchedEndFieldId = null;
-    const rel = relationships.find((r) => {
-      if (r.startTableId !== tableData.id) return false;
-      const pair = getRelationshipFields(r).find(
-        (p) => p.startFieldId === fieldData.id,
-      );
-      if (!pair) return false;
-      matchedEndFieldId = pair.endFieldId;
-      return true;
-    });
-    if (!rel) return null;
-
-    const refTable = tables.find((tbl) => tbl.id === rel.endTableId);
-    const refField = refTable?.fields.find((f) => f.id === matchedEndFieldId);
-    if (!refTable || !refField) return null;
-
-    return { tableName: refTable.name, fieldName: refField.name };
-  };
+  // Precompute foreign-key references once per render (keyed by field id)
+  // instead of scanning all relationships for every field. The first
+  // relationship that starts at this table for a given field wins, matching
+  // the previous `relationships.find` behaviour.
+  const fieldReferences = useMemo(() => {
+    const map = new Map();
+    for (const r of relationships) {
+      if (r.startTableId !== tableData.id) continue;
+      for (const pair of getRelationshipFields(r)) {
+        if (map.has(pair.startFieldId)) continue;
+        const refTable = tablesById.get(r.endTableId);
+        const refField = refTable?.fields.find(
+          (f) => f.id === pair.endFieldId,
+        );
+        if (refTable && refField) {
+          map.set(pair.startFieldId, {
+            tableName: refTable.name,
+            fieldName: refField.name,
+          });
+        }
+      }
+    }
+    return map;
+  }, [relationships, tableData.id, tablesById]);
 
   if (tableData.hidden) return null;
 
@@ -245,7 +250,7 @@ export default function Table({
         width={settings.tableWidth}
         height={height}
         className="group drop-shadow-lg rounded-md cursor-move"
-        onPointerDown={onPointerDown}
+        onPointerDown={() => onPointerDown(tableData, ObjectType.TABLE)}
       >
         <div
           onDoubleClick={openEditor}
@@ -383,7 +388,7 @@ export default function Table({
 
           {visibleFieldEntries.map(({ field: e }, i) => {
             const resolved = resolveType(database, e.type);
-            const reference = getFieldReference(e);
+            const reference = fieldReferences.get(e.id);
             return settings.showFieldSummary ? (
               <Popover
                 key={e.id ?? i}
@@ -620,3 +625,5 @@ export default function Table({
     );
   }
 }
+
+export default memo(Table);

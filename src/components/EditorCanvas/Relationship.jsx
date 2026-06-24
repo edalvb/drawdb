@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, useEffect } from "react";
+import { memo, useLayoutEffect, useMemo, useRef, useState, useEffect } from "react";
 import { Cardinality, ObjectType, Tab } from "../../data/constants";
 import { calcPath, calcCompositePath } from "../../utils/calcPath";
 import { useDiagram, useSettings, useLayout, useSelect } from "../../hooks";
@@ -12,18 +12,22 @@ import {
 } from "../../utils/utils";
 
 const labelFontSize = 16;
+const cardinalityOffset = 28;
 
-export default function Relationship({ data }) {
+function Relationship({ data }) {
   const { settings } = useSettings();
-  const { tables, relationships } = useDiagram();
+  const { tablesById, relationships } = useDiagram();
   const { layout } = useLayout();
   const { selectedElement, setSelectedElement } = useSelect();
   const { t } = useTranslation();
 
-  const pathValues = useMemo(() => {
-    const startTable = tables.find((t) => t.id === data.startTableId);
-    const endTable = tables.find((t) => t.id === data.endTableId);
+  // Resolve only the two tables this relationship connects (O(1) lookups).
+  // Keying the derived values on these specific tables means moving an
+  // unrelated table doesn't recompute this relationship's path.
+  const startTable = tablesById.get(data.startTableId);
+  const endTable = tablesById.get(data.endTableId);
 
+  const pathValues = useMemo(() => {
     if (!startTable || !endTable || startTable.hidden || endTable.hidden)
       return null;
 
@@ -62,7 +66,7 @@ export default function Relationship({ data }) {
         fields: endFields,
       },
     };
-  }, [tables, relationships, data]);
+  }, [startTable, endTable, relationships, data]);
 
   const isComposite = (pathValues?.startFieldIndices?.length ?? 0) > 1;
 
@@ -81,8 +85,71 @@ export default function Relationship({ data }) {
     );
   }, [pathValues, isComposite, settings.tableWidth, settings.showComments]);
 
+  // The SVG "d" string is identical for the visible path and the invisible
+  // wide hover path, so compute it once per render.
+  const pathString = useMemo(() => {
+    if (!pathValues) return "";
+    return composite
+      ? composite.path
+      : calcPath(pathValues, settings.tableWidth, 1, settings.showComments);
+  }, [pathValues, composite, settings.tableWidth, settings.showComments]);
+
   const pathRef = useRef();
   const labelRef = useRef();
+
+  // Label/cardinality placement needs the rendered path geometry
+  // (getTotalLength/getPointAtLength) and the label's measured size. Reading
+  // those during render would force a synchronous reflow on every render; doing
+  // it in a layout effect keeps the path off the render-time critical path and
+  // only recomputes when the geometry actually changes.
+  const [geometry, setGeometry] = useState(null);
+
+  useLayoutEffect(() => {
+    if (!pathValues) {
+      setGeometry(null);
+      return;
+    }
+
+    const labelBBox = labelRef.current?.getBBox();
+    const labelWidth = labelBBox?.width ?? 0;
+    const labelHeight = labelBBox?.height ?? 0;
+
+    if (composite) {
+      setGeometry({
+        labelX: composite.labelPoint.x - labelWidth / 2,
+        labelY: composite.labelPoint.y + labelHeight / 2,
+        cardinalityStartX: composite.startCardinality.x,
+        cardinalityStartY: composite.startCardinality.y,
+        cardinalityEndX: composite.endCardinality.x,
+        cardinalityEndY: composite.endCardinality.y,
+      });
+      return;
+    }
+
+    const pathElm = pathRef.current;
+    if (!pathElm) return;
+
+    const pathLength = pathElm.getTotalLength();
+    const labelPoint = pathElm.getPointAtLength(pathLength / 2);
+    const point1 = pathElm.getPointAtLength(cardinalityOffset);
+    const point2 = pathElm.getPointAtLength(pathLength - cardinalityOffset);
+
+    setGeometry({
+      labelX: labelPoint.x - labelWidth / 2,
+      labelY: labelPoint.y + labelHeight / 2,
+      cardinalityStartX: point1.x,
+      cardinalityStartY: point1.y,
+      cardinalityEndX: point2.x,
+      cardinalityEndY: point2.y,
+    });
+  }, [
+    pathValues,
+    pathString,
+    composite,
+    data.name,
+    settings.showRelationshipLabels,
+    settings.showCardinality,
+  ]);
 
   let cardinalityStart = "1";
   let cardinalityEnd = "1";
@@ -106,42 +173,6 @@ export default function Relationship({ data }) {
       break;
     default:
       break;
-  }
-
-  let cardinalityStartX = 0;
-  let cardinalityEndX = 0;
-  let cardinalityStartY = 0;
-  let cardinalityEndY = 0;
-  let labelX = 0;
-  let labelY = 0;
-
-  let labelWidth = labelRef.current?.getBBox().width ?? 0;
-  let labelHeight = labelRef.current?.getBBox().height ?? 0;
-
-  const cardinalityOffset = 28;
-
-  if (composite) {
-    labelX = composite.labelPoint.x - (labelWidth ?? 0) / 2;
-    labelY = composite.labelPoint.y + (labelHeight ?? 0) / 2;
-    cardinalityStartX = composite.startCardinality.x;
-    cardinalityStartY = composite.startCardinality.y;
-    cardinalityEndX = composite.endCardinality.x;
-    cardinalityEndY = composite.endCardinality.y;
-  } else if (pathRef.current) {
-    const pathLength = pathRef.current.getTotalLength();
-
-    const labelPoint = pathRef.current.getPointAtLength(pathLength / 2);
-    labelX = labelPoint.x - (labelWidth ?? 0) / 2;
-    labelY = labelPoint.y + (labelHeight ?? 0) / 2;
-
-    const point1 = pathRef.current.getPointAtLength(cardinalityOffset);
-    cardinalityStartX = point1.x;
-    cardinalityStartY = point1.y;
-    const point2 = pathRef.current.getPointAtLength(
-      pathLength - cardinalityOffset,
-    );
-    cardinalityEndX = point2.x;
-    cardinalityEndY = point2.y;
   }
 
   const edit = () => {
@@ -174,16 +205,7 @@ export default function Relationship({ data }) {
       <g className="select-none group" onDoubleClick={edit}>
         {/* invisible wider path for better hover ux */}
         <path
-          d={
-            composite
-              ? composite.path
-              : calcPath(
-                  pathValues,
-                  settings.tableWidth,
-                  1,
-                  settings.showComments,
-                )
-          }
+          d={pathString}
           fill="none"
           stroke="transparent"
           strokeWidth={12}
@@ -191,24 +213,15 @@ export default function Relationship({ data }) {
         />
         <path
           ref={pathRef}
-          d={
-            composite
-              ? composite.path
-              : calcPath(
-                  pathValues,
-                  settings.tableWidth,
-                  1,
-                  settings.showComments,
-                )
-          }
+          d={pathString}
           className="relationship-path"
           fill="none"
           cursor="pointer"
         />
         {settings.showRelationshipLabels && (
           <text
-            x={labelX}
-            y={labelY}
+            x={geometry?.labelX ?? 0}
+            y={geometry?.labelY ?? 0}
             fill={settings.mode === "dark" ? "lightgrey" : "#333"}
             fontSize={labelFontSize}
             fontWeight={500}
@@ -218,16 +231,16 @@ export default function Relationship({ data }) {
             {data.name}
           </text>
         )}
-        {(composite || pathRef.current) && settings.showCardinality && (
+        {geometry && settings.showCardinality && (
           <>
             <CardinalityLabel
-              x={cardinalityStartX}
-              y={cardinalityStartY}
+              x={geometry.cardinalityStartX}
+              y={geometry.cardinalityStartY}
               text={cardinalityStart}
             />
             <CardinalityLabel
-              x={cardinalityEndX}
-              y={cardinalityEndY}
+              x={geometry.cardinalityEndX}
+              y={geometry.cardinalityEndY}
               text={cardinalityEnd}
             />
           </>
@@ -257,6 +270,8 @@ export default function Relationship({ data }) {
     </>
   );
 }
+
+export default memo(Relationship);
 
 function CardinalityLabel({ x, y, text, r = 12, padding = 14 }) {
   const [textWidth, setTextWidth] = useState(0);
